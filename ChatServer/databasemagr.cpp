@@ -49,6 +49,12 @@ bool DataBaseMagr::OpenDb(const QString &dataName)
 
     query.exec("INSERT INTO USERINFO VALUES(1, 'admin', '123456', '2.bmp', 0, 1, '');");
 
+    // 离线消息队列表（私聊）：自增主键 + 基本内容 + msgId
+    query.exec("CREATE TABLE IF NOT EXISTS MSGQUEUE (id INTEGER PRIMARY KEY AUTOINCREMENT, fromId INT, toId INT, type INT, msg varchar(500), ts DATETIME, msgId INT);");
+    // 迁移：为已有表补充 msgId 列（重复执行无害，失败可忽略）
+    QSqlQuery alterQuery;
+    alterQuery.exec("ALTER TABLE MSGQUEUE ADD COLUMN msgId INT DEFAULT 0;");
+
     // 更新状态,避免有些客户端异常退出没有更新下线状态
     ChangeAllUserStatus();
     QueryAll();
@@ -673,4 +679,63 @@ void DataBaseMagr::QueryAll()
                  << query.value(2).toString().length();
     }
 
+}
+
+/**
+ * @brief DataBaseMagr::AddOfflineMsg
+ */
+int DataBaseMagr::AddOfflineMsg(const int &fromId, const int &toId, const int &type, const QString &msg, const int &msgId)
+{
+    QSqlQuery query;
+    query.prepare("INSERT INTO MSGQUEUE (fromId, toId, type, msg, ts, msgId) VALUES (?, ?, ?, ?, ?, ?);");
+    query.bindValue(0, fromId);
+    query.bindValue(1, toId);
+    query.bindValue(2, type);
+    query.bindValue(3, msg);
+    query.bindValue(4, DATE_TME_FORMAT);
+    query.bindValue(5, msgId);
+    bool ok = query.exec();
+    if (!ok) return -1;
+
+    QSqlQuery lastIdQuery("SELECT last_insert_rowid();");
+    if (lastIdQuery.next()) {
+        return lastIdQuery.value(0).toInt();
+    }
+    return -1;
+}
+
+/**
+ * @brief DataBaseMagr::GetOfflineMsgs
+ */
+QVector<QJsonObject> DataBaseMagr::GetOfflineMsgs(const int &toId) const
+{
+    QVector<QJsonObject> result;
+    QString strQuery = "SELECT id, fromId, toId, type, msg, ts, msgId FROM MSGQUEUE WHERE toId=";
+    strQuery.append(QString::number(toId));
+    strQuery.append(" ORDER BY id ASC;");
+
+    QSqlQuery query(strQuery);
+    while (query.next()) {
+        QJsonObject obj;
+        obj.insert("id", query.value(0).toInt());
+        obj.insert("from", query.value(1).toInt());
+        obj.insert("to", query.value(2).toInt());
+        obj.insert("type", query.value(3).toInt());
+        obj.insert("msg", query.value(4).toString());
+        obj.insert("ts", query.value(5).toString());
+        obj.insert("msgId", query.value(6).toInt());
+        result.append(obj);
+    }
+    return result;
+}
+
+/**
+ * @brief DataBaseMagr::DeleteOfflineMsg
+ */
+void DataBaseMagr::DeleteOfflineMsg(const int &msgRowId)
+{
+    QString strSql = "DELETE FROM MSGQUEUE WHERE id=";
+    strSql.append(QString::number(msgRowId));
+    QSqlQuery query(strSql);
+    query.exec();
 }

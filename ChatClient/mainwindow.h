@@ -108,6 +108,7 @@ private:
     // 消息处理
     void ParseFriendMessageReply(const QJsonValue &dataVal);
     void ParseGroupMessageReply(const QJsonValue &dataVal);
+    void ParseAckReply(const QJsonValue &dataVal);
 
     void AddMyGroups(const QJsonValue &dataVal);
     void UpdateFriendStatus(const quint8 &nStatus, const QJsonValue &dataVal);

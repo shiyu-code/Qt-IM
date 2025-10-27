@@ -9,6 +9,7 @@
 #include <QHostAddress>
 #include <QDataStream>
 #include <QApplication>
+#include <QDateTime>
 
 ClientSocket::ClientSocket(QObject *parent) :
     QObject(parent)
@@ -16,10 +17,20 @@ ClientSocket::ClientSocket(QObject *parent) :
     m_nId = -1;
 
     m_tcpSocket = new QTcpSocket(this);
+    m_heartbeatTimer = new QTimer(this);
+    m_heartbeatTimer->setInterval(15000); // 15s 心跳
+    m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setInterval(1000); // 初始 1s 重连节拍
+    m_reconnectTimer->setSingleShot(false);
+    m_waitingPong = false;
+    m_missedPong = 0;
+    m_reconnectDelayMs = 1000; // 动态调整的重连延迟
 
     connect(m_tcpSocket, SIGNAL(readyRead()), this, SLOT(SltReadyRead()));
     connect(m_tcpSocket, SIGNAL(connected()), this, SLOT(SltConnected()));
     connect(m_tcpSocket, SIGNAL(disconnected()), this, SLOT(SltDisconnected()));
+    connect(m_heartbeatTimer, SIGNAL(timeout()), this, SLOT(SltHeartbeatTimeout()));
+    connect(m_reconnectTimer, SIGNAL(timeout()), this, SLOT(SltReconnectTimeout()));
 }
 
 ClientSocket::~ClientSocket()
@@ -135,6 +146,14 @@ void ClientSocket::SltDisconnected()
 {
     qDebug() << "has disconnecetd";
     m_tcpSocket->abort();
+    if (m_heartbeatTimer->isActive()) m_heartbeatTimer->stop();
+    m_waitingPong = false;
+    m_missedPong = 0;
+    // 启动重连定时器
+    if (!m_reconnectTimer->isActive()) {
+        m_reconnectTimer->setInterval(m_reconnectDelayMs);
+        m_reconnectTimer->start();
+    }
     Q_EMIT signalStatus(DisConnectedHost);
 }
 
@@ -144,6 +163,12 @@ void ClientSocket::SltDisconnected()
 void ClientSocket::SltConnected()
 {
     qDebug() << "has connecetd";
+    if (!m_heartbeatTimer->isActive()) m_heartbeatTimer->start();
+    // 连接成功后复位重连策略
+    if (m_reconnectTimer->isActive()) m_reconnectTimer->stop();
+    m_reconnectDelayMs = 1000;
+    m_waitingPong = false;
+    m_missedPong = 0;
     Q_EMIT signalStatus(ConnectedHost);
 }
 
@@ -248,6 +273,11 @@ void ClientSocket::SltReadyRead()
                 Q_EMIT signalMessage(RefreshGroups, dataVal);
             }
                 break;
+            case Ack:
+            {
+                Q_EMIT signalMessage(Ack, dataVal);
+            }
+                break;
             case SendMsg:
             {
                 Q_EMIT signalMessage(SendMsg, dataVal);
@@ -268,11 +298,58 @@ void ClientSocket::SltReadyRead()
                 Q_EMIT signalMessage(SendPicture, dataVal);
             }
                 break;
+            case Pong:
+            {
+                // 心跳回应，保持安静或记录时间
+                qDebug() << "pong" << dataVal;
+                m_waitingPong = false;
+                m_missedPong = 0;
+            }
+                break;
             default:
                 break;
             }
         }
     }
+}
+
+void ClientSocket::SltHeartbeatTimeout()
+{
+    // 发送心跳包
+    if (m_tcpSocket->state() != QTcpSocket::ConnectedState) return;
+    if (m_waitingPong) {
+        m_missedPong++;
+        if (m_missedPong >= 3) {
+            qDebug() << "missed pong >=3, trigger reconnect";
+            // 触发重连流程
+            m_heartbeatTimer->stop();
+            m_tcpSocket->abort();
+            if (!m_reconnectTimer->isActive()) {
+                m_reconnectTimer->setInterval(m_reconnectDelayMs);
+                m_reconnectTimer->start();
+            }
+            return;
+        }
+    }
+    QJsonObject json;
+    json.insert("id", m_nId);
+    json.insert("ts", QDateTime::currentMSecsSinceEpoch());
+    SltSendMessage(Ping, json);
+    m_waitingPong = true;
+}
+
+void ClientSocket::SltReconnectTimeout()
+{
+    if (m_tcpSocket->state() == QTcpSocket::ConnectedState) {
+        m_reconnectTimer->stop();
+        return;
+    }
+    qDebug() << "attempt reconnect..." << MyApp::m_strHostAddr << MyApp::m_nMsgPort;
+    m_tcpSocket->abort();
+    m_tcpSocket->connectToHost(MyApp::m_strHostAddr, MyApp::m_nMsgPort);
+    // 指数退避，最大 30s
+    m_reconnectDelayMs = qMin(m_reconnectDelayMs * 2, 30000);
+    m_reconnectTimer->setInterval(m_reconnectDelayMs);
 }
 
 /**

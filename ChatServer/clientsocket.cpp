@@ -7,6 +7,7 @@
 #include <QDataStream>
 #include <QApplication>
 #include <QFileInfo>
+#include <QDateTime>
 
 ClientSocket::ClientSocket(QObject *parent, QTcpSocket *tcpSocket) :
     QObject(parent)
@@ -161,6 +162,15 @@ void ClientSocket::SltReadyRead()
                 Q_EMIT signalDownloadFile(dataVal);
             }
                 break;
+            case Ping:
+            {
+                // 心跳回应
+                QJsonObject json;
+                json.insert("id", m_nId);
+                json.insert("ts", QDateTime::currentMSecsSinceEpoch());
+                SltSendMessage(Pong, json);
+            }
+                break;
             default:
                 break;
             }
@@ -189,6 +199,28 @@ void ClientSocket::ParseLogin(const QJsonValue &dataVal)
         if (m_nId > 0) Q_EMIT signalConnected();
         // 发送查询结果至客户端
         SltSendMessage(Login, jsonObj);
+
+        // 登录成功后，推送离线消息
+        if (m_nId > 0) {
+            QVector<QJsonObject> offline = DataBaseMagr::Instance()->GetOfflineMsgs(m_nId);
+            for (const QJsonObject &msgRow : offline) {
+                int fromId = msgRow.value("from").toInt();
+                int type   = msgRow.value("type").toInt();
+                QString msg = msgRow.value("msg").toString();
+                int rowId  = msgRow.value("id").toInt();
+
+                // 构建与在线转发一致的 data 对象
+                QJsonObject jsonMsg;
+                jsonMsg.insert("id", fromId);
+                jsonMsg.insert("to", m_nId);
+                jsonMsg.insert("msg", msg);
+                jsonMsg.insert("type", type);
+
+                Q_EMIT signalMsgToClient(SendMsg, m_nId, jsonMsg);
+                // 删除已发送的离线消息
+                DataBaseMagr::Instance()->DeleteOfflineMsg(rowId);
+            }
+        }
     }
 }
 
@@ -480,7 +512,31 @@ void ClientSocket::ParseFriendMessages(const QByteArray &reply)
 
             QJsonObject dataObj = dataVal.toObject();
             int nId = dataObj.value("to").toInt();
-            Q_EMIT signalMsgToClient(nType, nId, dataObj);
+            int msgId = dataObj.value("msgId").toInt();
+            // 判断接收者在线状态，在线则直接转发；离线入队
+            int lineStatus = DataBaseMagr::Instance()->GetUserLineStatus(nId);
+            if (OnLine == lineStatus) {
+                Q_EMIT signalMsgToClient(nType, nId, dataObj);
+                // 发送ACK：已转发
+                QJsonObject ack;
+                ack.insert("to", nId);
+                ack.insert("type", nType);
+                ack.insert("queued", 0);
+                ack.insert("msg", dataObj.value("msg").toString());
+                ack.insert("msgId", msgId);
+                SltSendMessage(Ack, ack);
+            } else {
+                // 离线消息入队
+                int rowId = DataBaseMagr::Instance()->AddOfflineMsg(m_nId, nId, dataObj.value("type").toInt(), dataObj.value("msg").toString(), msgId);
+                // 发送ACK：已入队
+                QJsonObject ack;
+                ack.insert("to", nId);
+                ack.insert("type", nType);
+                ack.insert("queued", 1);
+                ack.insert("msg", dataObj.value("msg").toString());
+                ack.insert("msgId", msgId);
+                SltSendMessage(Ack, ack);
+            }
         }
     }
 }

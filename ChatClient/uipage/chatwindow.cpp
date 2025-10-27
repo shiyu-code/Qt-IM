@@ -285,6 +285,10 @@ void ChatWindow::on_btnSendMsg_clicked()
     json.insert("to", m_cell->id);
     json.insert("msg", text);
     json.insert("type", Text);
+    // 生成本地消息ID与时间戳，便于送达匹配
+    int msgId = int(QDateTime::currentMSecsSinceEpoch() % 2147483647);
+    json.insert("msgId", msgId);
+    json.insert("ts", QDateTime::currentMSecsSinceEpoch());
 
     // 发送消息
     Q_EMIT signalSendMessage(0 == m_nChatType ? SendMsg : SendGroupMsg, json);
@@ -342,6 +346,9 @@ void ChatWindow::on_toolButton_7_clicked()
     json.insert("to", m_cell->id);
     json.insert("msg", strFileName);
     json.insert("type", Picture);
+    int msgId = int(QDateTime::currentMSecsSinceEpoch() % 2147483647);
+    json.insert("msgId", msgId);
+    json.insert("ts", QDateTime::currentMSecsSinceEpoch());
 
     m_tcpFileSocket->StartTransferFile(strFileName);
     m_nFileType = SendPicture;

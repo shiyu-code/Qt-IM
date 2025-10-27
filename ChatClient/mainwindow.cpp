@@ -645,6 +645,11 @@ void MainWindow::SltTcpReply(const quint8 &type, const QJsonValue &dataVal)
         ParseFriendMessageReply(dataVal);
     }
         break;
+    case Ack:
+    {
+        ParseAckReply(dataVal);
+    }
+        break;
     default:
         break;
     }
@@ -1262,4 +1267,22 @@ void MainWindow::ParseUpFriendHead(const QJsonValue &dataVal)
     QString strHead = jsonObj.value("head").toString();
 
     DownloadFriendHead(nId, strHead);
+}
+void MainWindow::ParseAckReply(const QJsonValue &dataVal)
+{
+    // 简单占位处理：日志记录/可扩展为UI提示
+    if (dataVal.isObject()) {
+        QJsonObject obj = dataVal.toObject();
+        int toId = obj.value("to").toInt();
+        int msgType = obj.value("type").toInt();
+        int queued = obj.value("queued").toInt();
+        int msgId = obj.value("msgId").toInt();
+        QString msg = obj.value("msg").toString();
+
+        qDebug() << "ACK:" << "to" << toId << ", type" << msgType
+                 << ", queued" << queued << ", msgId" << msgId << ", msg" << msg;
+
+        // 可选轻量提醒：目前仅占位，不弹窗，避免打扰用户
+        // 如需提示，可用：CMessageBox::Infomation(this, queued ? tr("消息已入队，对方上线后送达") : tr("消息已转发至在线用户"));
+    }
 }

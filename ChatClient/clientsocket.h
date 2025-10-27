@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTcpSocket>
 #include <QFile>
+#include <QTimer>
 
 /////////////////////////////////////////////////////////////////////////
 /// \brief The ClientSocket class
@@ -39,6 +40,11 @@ private:
     // tcpsocket
     QTcpSocket *m_tcpSocket;
     int m_nId;
+    QTimer *m_heartbeatTimer;
+    QTimer *m_reconnectTimer;
+    bool m_waitingPong;
+    int m_missedPong;
+    int m_reconnectDelayMs;
 private slots:
     // 与服务器断开链接
     void SltDisconnected();
@@ -46,6 +52,10 @@ private slots:
     void SltConnected();
     // tcp消息处理
     void SltReadyRead();
+    // 心跳定时器
+    void SltHeartbeatTimeout();
+    // 重连定时器
+    void SltReconnectTimeout();
 
 private:
     // 解析登陆返回信息

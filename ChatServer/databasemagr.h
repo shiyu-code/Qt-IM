@@ -67,6 +67,14 @@ public:
     QString GetUserName(const int &id) const;
     QString GetUserHead(const int &id) const;
     QJsonObject GetUserInfo(const int &id) const;
+
+    // 离线消息队列
+    // 插入离线私聊消息，返回新消息id（>=1），失败返回-1
+    int AddOfflineMsg(const int &fromId, const int &toId, const int &type, const QString &msg, const int &msgId);
+    // 获取某用户的所有离线消息（私聊），每条记录对象包含：from、to、type、msg、id、ts
+    QVector<QJsonObject> GetOfflineMsgs(const int &toId) const;
+    // 删除指定离线消息（按id）
+    void DeleteOfflineMsg(const int &msgRowId);
 signals:
 
 public slots:

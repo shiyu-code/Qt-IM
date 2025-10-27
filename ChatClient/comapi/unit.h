@@ -150,6 +150,11 @@ typedef enum {
     GetFile             = 0x65,     // 获取文件（到服务器下载文件）
     GetPicture,                     // 图片下载
 
+    // 保活心跳
+    Ping               = 0x70,
+    Pong               = 0x71,
+    Ack                = 0x72,
+
 } E_MSG_TYPE;
 
 typedef enum {
