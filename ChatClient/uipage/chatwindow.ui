@@ -236,6 +236,20 @@
            </widget>
           </item>
           <item>
+           <widget class="QToolButton" name="btnVoiceRecord">
+            <property name="toolTip">
+             <string>按住录音</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+            <property name="icon">
+             <iconset resource="../images.qrc">
+              <normaloff>:/resource/common/ic_file.png</normaloff>:/resource/common/ic_file.png</iconset>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QToolButton" name="toolButton_7">
             <property name="toolTip">
              <string>发送图片</string>

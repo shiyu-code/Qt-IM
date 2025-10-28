@@ -9,7 +9,10 @@ ItemInfo::ItemInfo() :
     m_strSize(""),
     m_orientation(Left),
     m_msgType(Text),
-    m_itemHeight(ITEM_HEIGHT)
+    m_itemHeight(ITEM_HEIGHT),
+    m_nStatus(MsgPending),
+    m_msgId(0),
+    m_strFilePath("")
 {
 
 }
@@ -23,7 +26,10 @@ ItemInfo::ItemInfo(const QString &strName, const QString &datetime, const QStrin
     m_strSize(strSize),
     m_orientation(orientation),
     m_msgType(msgType),
-    m_itemHeight(ITEM_HEIGHT)
+    m_itemHeight(ITEM_HEIGHT),
+    m_nStatus(MsgPending),
+    m_msgId(0),
+    m_strFilePath("")
 {
 
 }
@@ -120,4 +126,34 @@ QRectF ItemInfo::GetBobbleRect() const
 void ItemInfo::SetBobbleRect(const QRectF &bobbleRect)
 {
     m_bobbleRect = bobbleRect;
+}
+
+void ItemInfo::SetStatus(quint8 status)
+{
+    m_nStatus = status;
+}
+
+quint8 ItemInfo::GetStatus() const
+{
+    return m_nStatus;
+}
+
+void ItemInfo::SetMsgId(int msgId)
+{
+    m_msgId = msgId;
+}
+
+int ItemInfo::GetMsgId() const
+{
+    return m_msgId;
+}
+
+void ItemInfo::SetFilePath(const QString &filePath)
+{
+    m_strFilePath = filePath;
+}
+
+QString ItemInfo::GetFilePath() const
+{
+    return m_strFilePath;
 }

@@ -60,6 +60,12 @@ public:
     // 获取历史聊天记录
     QVector<ItemInfo *> QueryHistory(const int &id, const int &count = 0);
 
+    // 更新消息状态（按用户id与本地msgId）
+    void UpdateMsgStatus(const int &userId, const int &msgId, const quint8 &status);
+
+    // 重发时更新本地msgId（并可同时重置状态）
+    void UpdateMsgId(const int &userId, const int &oldMsgId, const int &newMsgId, const quint8 &status);
+
     // 测试使用，打印数据库中的所有信息
     void QueryAll();
 signals:

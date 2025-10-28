@@ -44,6 +44,18 @@ public:
     void SetBobbleRect(const QRectF &bobbleRect);
     QRectF GetBobbleRect() const;
 
+    // 消息状态（本地渲染）
+    void SetStatus(quint8 status);
+    quint8 GetStatus() const;
+
+    // 本地消息 ID（用于 ACK 对齐）
+    void SetMsgId(int msgId);
+    int GetMsgId() const;
+
+    // 文件路径（用于语音等文件类型消息）
+    void SetFilePath(const QString &filePath);
+    QString GetFilePath() const;
+
 private:
     // 消息的标题，比如名字和时间
     QString     m_strName;
@@ -66,6 +78,10 @@ private:
     QRectF      m_bobbleRect;
     // 消息状态
     quint8      m_nStatus;
+    // 本地消息 ID
+    int         m_msgId;
+    // 文件路径
+    QString     m_strFilePath;
 };
 
 

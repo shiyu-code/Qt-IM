@@ -25,6 +25,9 @@ public:
     void addItem(ItemInfo *item);
     void addItems(QVector<ItemInfo*> items);
 
+    // 更新指定消息的状态
+    void updateMessageStatus(int msgId, quint8 status);
+
     void clear();
 
     void render();
@@ -63,6 +66,8 @@ Q_SIGNALS:
     void sig_setCurrentIndex(int currIndex);
     void sig_itemClicked(const QString& str);
     void signalDownloadFile(const QString &fileName);
+    // 失败消息点击重发
+    void signalRetryMessage(int msgId, quint8 msgType, const QString &content);
 };
 
 class BubbleListPrivate : public QWidget
@@ -75,6 +80,9 @@ public:
     /// public interfaces
     void addItem(ItemInfo *item);
     void addItems(QVector<ItemInfo*> items);
+
+    void updateMessageStatus(int msgId, quint8 status);
+    void updateMessageId(int oldMsgId, int newMsgId);
 
     void clear();
 
@@ -148,6 +156,7 @@ Q_SIGNALS:
     void sig_setCurrentIndex(int currIndex);
     void sig_itemClicked(const QString& str);
     void signalDownloadFile(const QString &fileName);
+    void signalRetryMessage(int msgId, quint8 msgType, const QString &content);
 
 private:
     QMenu *picRightButtonMenu;

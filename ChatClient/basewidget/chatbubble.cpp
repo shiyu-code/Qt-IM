@@ -9,6 +9,8 @@
 #include <QDesktopServices>
 
 #include "iteminfo.h"
+#include "testmedia.h"
+#include <QToolTip>
 
 BubbleList::BubbleList(QWidget *parent) :
     QWidget(parent)
@@ -59,6 +61,7 @@ void BubbleList::initConns()
     connect(d,SIGNAL(sig_setCurrentIndex(int)),scrollbar,SLOT(setValue(int)));
     connect(d,SIGNAL(sig_itemClicked(QString)),this,SIGNAL(sig_itemClicked(QString)));
     connect(d,SIGNAL(signalDownloadFile(QString)),this,SIGNAL(signalDownloadFile(QString)));
+    connect(d,SIGNAL(signalRetryMessage(int,quint8,QString)),this,SIGNAL(signalRetryMessage(int,quint8,QString)));
 }
 
 void BubbleList::calcGeo()
@@ -110,6 +113,16 @@ void BubbleList::clear()
 void BubbleList::render()
 {
     d->render();
+}
+
+void BubbleList::updateMessageStatus(int msgId, quint8 status)
+{
+    d->updateMessageStatus(msgId, status);
+}
+
+void BubbleList::updateMessageId(int oldMsgId, int newMsgId)
+{
+    d->updateMessageId(oldMsgId, newMsgId);
 }
 
 /*************************************/
@@ -275,13 +288,31 @@ void BubbleListPrivate::mouseMoveEvent(QMouseEvent *e)
         {
             quint8 nType = m_IIVec.at(nIndex)->GetMsgType();
 
-            // 如果是图片或文件，可以直接打开
-            if (Picture == nType || Files == nType) {
+            // 如果是图片、文件或语音，显示手型指针
+            if (Picture == nType || Files == nType || Audio == nType) {
                 this->setCursor(Qt::PointingHandCursor);
                 m_bHover = true;
                 m_nHoverItemIndex = nIndex;
                 update();
                 return;
+            }
+
+            // 如果是右侧失败消息，悬停到“重发”区域时改为手型并提示
+            if (Right == m_IIVec.at(nIndex)->GetOrientation() && m_IIVec.at(nIndex)->GetStatus() == MsgFailed) {
+                QFont fStatus("微软雅黑", 8);
+                QFontMetrics fmS(fStatus);
+                int retryW = fmS.horizontalAdvance(QStringLiteral("重发"));
+                int retryH = fmS.height();
+                int padding = 6;
+                QRect retryRect(bubbleRect.right() - retryW - padding,
+                                bubbleRect.bottom() - retryH - padding,
+                                retryW + padding,
+                                retryH + padding);
+                if (retryRect.contains(e->pos())) {
+                    this->setCursor(Qt::PointingHandCursor);
+                    QToolTip::showText(mapToGlobal(e->pos()), QStringLiteral("点击重发"));
+                    return;
+                }
             }
         }
 
@@ -335,6 +366,51 @@ void BubbleListPrivate::mousePressEvent(QMouseEvent *e)
             nItemY += bubbleRect.height() + ITEM_SPACE;
         }
     }
+    else if (Qt::LeftButton == e->button()) {
+        int nItemY = ITEM_SPACE;
+        for (int nIndex = m_currIndex; nIndex < m_IIVec.count(); nIndex++)
+        {
+            if (nItemY > this->height()) {
+                break;
+            }
+
+            int nY = this->height() - nItemY;
+            QRectF bubbleRect = m_IIVec.at(nIndex)->GetBobbleRect();
+            if ((e->pos().y() < (nY) && (e->pos().y() > (nY - bubbleRect.height()))) &&
+                    ((e->pos().x() > bubbleRect.x()) &&
+                     (e->pos().x() < (bubbleRect.x() + bubbleRect.width()))))
+            {
+                // 左键点击语音消息，播放音频
+                if (Audio == m_IIVec.at(nIndex)->GetMsgType()) {
+                    QString strFile = m_IIVec.at(nIndex)->GetFilePath();
+                    if (strFile.isEmpty()) {
+                        strFile = m_IIVec.at(nIndex)->GetText();
+                    }
+                    if (QFile::exists(strFile)) {
+                        TestMedia::Instance()->playWav(strFile);
+                    }
+                    return;
+                }
+
+                if (Right == m_IIVec.at(nIndex)->GetOrientation() && m_IIVec.at(nIndex)->GetStatus() == MsgFailed) {
+                    QFont fStatus("微软雅黑", 8);
+                    QFontMetrics fmS(fStatus);
+                    int retryW = fmS.horizontalAdvance(QStringLiteral("重发"));
+                    int retryH = fmS.height();
+                    int padding = 6;
+                    QRect retryRect(bubbleRect.right() - retryW - padding,
+                                    bubbleRect.bottom() - retryH - padding,
+                                    retryW + padding,
+                                    retryH + padding);
+                    if (retryRect.contains(e->pos())) {
+                        emit signalRetryMessage(m_IIVec.at(nIndex)->GetMsgId(), m_IIVec.at(nIndex)->GetMsgType(), m_IIVec.at(nIndex)->GetText());
+                        return;
+                    }
+                }
+            }
+            nItemY += bubbleRect.height() + ITEM_SPACE;
+        }
+    }
 }
 
 /**
@@ -364,6 +440,18 @@ void BubbleListPrivate::mouseDoubleClickEvent(QMouseEvent *e)
                 // 如果文件存在，可以打开
                 if (QFile::exists(strFile)) {
                     QDesktopServices::openUrl(QUrl(strFile));
+                }
+                return;
+            }
+
+            // 双击语音也进行播放
+            if (Audio == m_IIVec.at(nIndex)->GetMsgType()) {
+                QString strFile = m_IIVec.at(nIndex)->GetFilePath();
+                if (strFile.isEmpty()) {
+                    strFile = m_IIVec.at(nIndex)->GetText();
+                }
+                if (QFile::exists(strFile)) {
+                    TestMedia::Instance()->playWav(strFile);
                 }
                 return;
             }
@@ -499,7 +587,30 @@ void BubbleListPrivate::drawItems(QPainter *painter)
         }
             break;
         case Audio:
-
+        {
+            // 语音消息图标
+            pixmap = QPixmap(":/resource/common/ic_voice.png");
+            if (pixmap.isNull()) {
+                // 如果没有语音图标，使用默认图标
+                pixmap = QPixmap(":/resource/common/ic_file.png");
+            }
+            
+            // 计算语音消息气泡大小
+            QFont font("微软雅黑", 10);
+            QFontMetrics fm(font);
+            QString voiceText = "[语音消息]";
+            
+            // 气泡宽度：图标宽度 + 文字宽度 + 间距
+            bubbleWidth = pixmap.width() + fm.width(voiceText) + 30;
+            bubbleHeight = qMax(pixmap.height() + 10, 50); // 最小高度50
+            
+            // 限制最大宽度
+            bubbleWidth = bubbleWidth < (nWidth * 2 / 3) ? bubbleWidth : (nWidth * 2 / 3);
+            bubbleWidth = bubbleWidth < 120 ? 120 : bubbleWidth; // 最小宽度120
+            
+            // 文字初始化高度
+            nY = this->height() - nItemY - bubbleHeight;
+        }
             break;
         case Picture:
         {
@@ -687,6 +798,35 @@ void BubbleListPrivate::drawItems(QPainter *painter)
             painter->restore();
         }
 
+        // 在右侧气泡内侧右下角绘制状态文案（不额外改变高度）
+        if (Right == nOrientation) {
+            QString statusText;
+            bool canRetry = false;
+            switch (m_IIVec.at(nIndex)->GetStatus()) {
+            case MsgDelivered: statusText = QStringLiteral("已送达"); break;
+            case MsgQueued:    statusText = QStringLiteral("已入队"); break;
+            case MsgFailed:    statusText = QStringLiteral("发送失败"); canRetry = true; break;
+            case MsgPending:
+            default:           statusText = QStringLiteral("已发送"); break;
+            }
+            painter->save();
+            QFont fStatus("微软雅黑", 8);
+            painter->setFont(fStatus);
+            painter->setPen(QColor("#888888"));
+            QFontMetrics fmS(fStatus);
+            QRectF statusRect(msgRect.x(), msgRect.y() + bubbleHeight - fmS.height(), bubbleWidth, fmS.height());
+            painter->drawText(statusRect, statusText, Qt::AlignRight | Qt::AlignVCenter);
+            if (canRetry) {
+                int retryW = fmS.horizontalAdvance(QStringLiteral("重发"));
+                int retryH = fmS.height();
+                int rx = statusRect.right() - retryW;
+                int ry = statusRect.top() + (statusRect.height() - retryH) / 2;
+                painter->setPen(QColor(33,150,243));
+                painter->drawText(QRect(rx, ry, retryW, retryH), QStringLiteral("重发"), Qt::AlignLeft | Qt::AlignVCenter);
+            }
+            painter->restore();
+        }
+
         m_IIVec.at(nIndex)->SetBobbleRect(bobbleRect);
         nItemY += (bobbleRect.height()) + ITEM_SPACE + ITEM_TITLE_HEIGHT;
     }
@@ -727,6 +867,28 @@ void BubbleListPrivate::clear()
 void BubbleListPrivate::render()
 {
     update();
+}
+
+void BubbleListPrivate::updateMessageStatus(int msgId, quint8 status)
+{
+    for (int i = 0; i < m_IIVec.size(); ++i) {
+        if (m_IIVec.at(i)->GetMsgId() == msgId) {
+            m_IIVec.at(i)->SetStatus(status);
+            update();
+            return;
+        }
+    }
+}
+
+void BubbleListPrivate::updateMessageId(int oldMsgId, int newMsgId)
+{
+    for (int i = 0; i < m_IIVec.size(); ++i) {
+        if (m_IIVec.at(i)->GetMsgId() == oldMsgId) {
+            m_IIVec.at(i)->SetMsgId(newMsgId);
+            update();
+            return;
+        }
+    }
 }
 
 /*!

@@ -108,6 +108,14 @@ typedef enum {
     Files,          // 文件传输
 } MessageType;
 
+// 消息投递状态（客户端本地渲染用）
+typedef enum {
+    MsgPending = 0,     // 已发送，等待ACK
+    MsgDelivered,       // 对端在线，已转发
+    MsgQueued,          // 对端离线，已入队
+    MsgFailed           // 发送失败（预留）
+} E_DELIVERY_STATUS;
+
 
 typedef enum {
     Unknow,

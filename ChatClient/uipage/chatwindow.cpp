@@ -48,6 +48,12 @@ ChatWindow::ChatWindow(QWidget *parent) :
     connect(m_tcpFileSocket, SIGNAL(signalUpdateProgress(quint64,quint64)),
             this, SLOT(SltUpdateProgress(quint64,quint64)));
 
+    // 语音录制器
+    m_audioRecorder = new AudioRecorder(this);
+    m_bRecording = false;
+    m_bSendingVoice = false;
+    connect(m_audioRecorder, SIGNAL(signalFinished()), this, SLOT(SltVoiceRecordFinished()));
+
     QMenu *sendMenu = new QMenu(this);
     QAction *actionEnter     = sendMenu->addAction(QIcon(""), tr("按Enter键发送消息"));
     QAction *actionCtrlEnter = sendMenu->addAction(QIcon(""), tr("按Ctrl+Enter键发送消息"));
@@ -75,6 +81,7 @@ ChatWindow::ChatWindow(QWidget *parent) :
     connect(ui->btnWinClose, SIGNAL(clicked(bool)), this, SLOT(SltCloseWindow()));
     connect(ui->btnClose, SIGNAL(clicked(bool)), this, SLOT(SltCloseWindow()));
     connect(ui->widgetBubble, SIGNAL(signalDownloadFile(QString)), this, SLOT(SltDownloadFiles(QString)));
+    connect(ui->widgetBubble, SIGNAL(signalRetryMessage(int,quint8,QString)), this, SLOT(SltRetryMessage(int,quint8,QString)));
 
     ui->textEditMsg->setFocus();
 }
@@ -151,14 +158,21 @@ void ChatWindow::AddMessage(const QJsonValue &json)
         itemInfo->SetMsgType(type);
         itemInfo->SetText(strText);
 
-        // 接收的文件
+        // 接收的文件（含语音识别）
         if (Files == type) {
-            QString strSize = "文件大小： ";
-            strSize = dataObj.value("size").toString();
-            strText = MyApp::m_strRecvPath + strText;
+            QString strSize = dataObj.value("size").toString();
+            QString fileName = strText;
+            QString fullPath = MyApp::m_strRecvPath + fileName;
 
-            itemInfo->SetText(strText);
-            itemInfo->SetFileSizeString(strSize);
+            // 如果是语音文件，转换为 Audio 类型并保存路径
+            if (fileName.endsWith(".wav", Qt::CaseInsensitive)) {
+                itemInfo->SetMsgType(Audio);
+                itemInfo->SetText("[语音消息]");
+                itemInfo->SetFilePath(fullPath);
+            } else {
+                itemInfo->SetText(fullPath);
+                itemInfo->SetFileSizeString(strSize);
+            }
         }
 
         // 加入聊天窗口
@@ -300,6 +314,8 @@ void ChatWindow::on_btnSendMsg_clicked()
     itemInfo->SetHeadPixmap(MyApp::m_strHeadFile);
     itemInfo->SetText(text);
     itemInfo->SetOrientation(Right);
+    itemInfo->SetMsgId(msgId);
+    itemInfo->SetStatus(MsgPending);
 
     // 加入聊天界面
     ui->widgetBubble->addItem(itemInfo);
@@ -310,6 +326,8 @@ void ChatWindow::on_btnSendMsg_clicked()
     if (0 != m_nChatType) return;
     // 保存消息记录到数据库
     DataBaseMagr::Instance()->AddHistoryMsg(m_cell->id, itemInfo);
+    // 启动ACK超时计时器
+    StartAckTimer(msgId);
 }
 
 // 延迟关闭
@@ -364,6 +382,8 @@ void ChatWindow::on_toolButton_7_clicked()
     itemInfo->SetText(strFileName);
     itemInfo->SetOrientation(Right);
     itemInfo->SetMsgType(Picture);
+    itemInfo->SetMsgId(msgId);
+    itemInfo->SetStatus(MsgPending);
 
     // 加入聊天界面
     ui->widgetBubble->addItem(itemInfo);
@@ -372,6 +392,26 @@ void ChatWindow::on_toolButton_7_clicked()
     if (0 != m_nChatType) return;
     // 保存消息记录到数据库
     DataBaseMagr::Instance()->AddHistoryMsg(m_cell->id, itemInfo);
+    // 启动ACK超时计时器
+    StartAckTimer(msgId);
+}
+
+void ChatWindow::UpdateMessageStatus(int msgId, quint8 status)
+{
+    // 取消并清理该消息的超时计时器
+    if (m_ackTimers.contains(msgId)) {
+        QTimer *t = m_ackTimers.value(msgId);
+        if (t) {
+            t->stop();
+            t->deleteLater();
+        }
+        m_ackTimers.remove(msgId);
+    }
+    ui->widgetBubble->updateMessageStatus(msgId, status);
+    // 私聊消息持久化状态更新
+    if (0 == m_nChatType) {
+        DataBaseMagr::Instance()->UpdateMsgStatus(m_cell->id, msgId, status);
+    }
 }
 
 /**
@@ -398,33 +438,54 @@ void ChatWindow::SltUpdateProgress(quint64 bytes, quint64 total)
 
    ui->widgetFileBoard->setVisible(bytes < total);
 
-   // 文件接收完成，发送消息给服务器，转发至对端
+   // 文件发送完成，发送消息给服务器，转发至对端
    if (bytes >= total && SendFile == m_nFileType) {
+       // 生成本地消息ID与时间戳，便于送达匹配
+       int msgId = int(QDateTime::currentMSecsSinceEpoch() % 2147483647);
 
+       // 统一构建并发送 JSON（复用文件协议）
        QJsonObject json;
        json.insert("id", MyApp::m_nId);
        json.insert("to", m_cell->id);
        json.insert("msg", myHelper::GetFileNameWithExtension(m_strFileName));
        json.insert("size", "文件大小：" + myHelper::CalcSize(total));
        json.insert("type", Files);
+       json.insert("msgId", msgId);
+       json.insert("ts", QDateTime::currentMSecsSinceEpoch());
        Q_EMIT signalSendMessage(SendFile, json);
 
-
-       // 构建气泡消息
+       // 构建气泡：根据是否为语音决定渲染类型
        ItemInfo *itemInfo = new ItemInfo();
        itemInfo->SetName(MyApp::m_strUserName);
        itemInfo->SetDatetime(DATE_TIME);
        itemInfo->SetHeadPixmap(MyApp::m_strHeadFile);
-       itemInfo->SetText(m_strFileName);
-       itemInfo->SetFileSizeString(myHelper::CalcSize(total));
        itemInfo->SetOrientation(Right);
-       itemInfo->SetMsgType(Files);
+       itemInfo->SetMsgId(msgId);
+       itemInfo->SetStatus(MsgPending);
+
+       if (m_bSendingVoice) {
+           // 语音消息气泡
+           itemInfo->SetMsgType(Audio);
+           itemInfo->SetText("[语音消息]");
+           itemInfo->SetFilePath(m_strFileName);
+       } else {
+           // 普通文件气泡
+           itemInfo->SetMsgType(Files);
+           itemInfo->SetText(m_strFileName);
+           itemInfo->SetFileSizeString(myHelper::CalcSize(total));
+       }
 
        // 加入聊天界面
        ui->widgetBubble->addItem(itemInfo);
 
-       // 保存消息记录到数据库
-       DataBaseMagr::Instance()->AddHistoryMsg(m_cell->id, itemInfo);
+       // 保存消息记录到数据库（群组不记录）
+       if (0 == m_nChatType) {
+           DataBaseMagr::Instance()->AddHistoryMsg(m_cell->id, itemInfo);
+           StartAckTimer(msgId);
+       }
+
+       // 复位语音发送标记
+       m_bSendingVoice = false;
    }
 }
 
@@ -545,9 +606,179 @@ QString ChatWindow::GetHeadPixmap(const QString &name) const
     return ":/resource/head/1.bmp";
 }
 
+void ChatWindow::StartAckTimer(int msgId)
+{
+    QTimer *timer = new QTimer(this);
+    timer->setSingleShot(true);
+    timer->setInterval(10000); // 10秒未收到ACK则视为失败
+    m_ackTimers.insert(msgId, timer);
+    connect(timer, SIGNAL(timeout()), this, SLOT(SltAckTimeout()));
+    timer->start();
+}
+
+void ChatWindow::SltAckTimeout()
+{
+    // 通过 sender() 找到对应的 msgId
+    QTimer *timer = qobject_cast<QTimer*>(sender());
+    if (!timer) return;
+    int targetMsgId = -1;
+    QHash<int, QTimer*>::iterator it = m_ackTimers.begin();
+    for (; it != m_ackTimers.end(); ++it) {
+        if (it.value() == timer) {
+            targetMsgId = it.key();
+            break;
+        }
+    }
+
+    if (targetMsgId != -1) {
+        ui->widgetBubble->updateMessageStatus(targetMsgId, MsgFailed);
+        if (0 == m_nChatType) {
+            DataBaseMagr::Instance()->UpdateMsgStatus(m_cell->id, targetMsgId, MsgFailed);
+        }
+        m_ackTimers.remove(targetMsgId);
+    }
+    timer->deleteLater();
+}
+
+void ChatWindow::SltRetryMessage(int oldMsgId, quint8 msgType, const QString &content)
+{
+    // 仅处理私聊的重发逻辑
+    if (0 != m_nChatType) {
+        return;
+    }
+
+    // 新的本地消息ID
+    int newMsgId = int(QDateTime::currentMSecsSinceEpoch() % 2147483647);
+
+    // 统一将旧气泡状态改为Pending并替换msgId
+    ui->widgetBubble->updateMessageStatus(oldMsgId, MsgPending);
+    ui->widgetBubble->updateMessageId(oldMsgId, newMsgId);
+
+    // 取消旧的ACK计时器（如果存在），并为新的msgId启动计时器
+    if (m_ackTimers.contains(oldMsgId)) {
+        QTimer *t = m_ackTimers.value(oldMsgId);
+        if (t) {
+            t->stop();
+            t->deleteLater();
+        }
+        m_ackTimers.remove(oldMsgId);
+    }
+
+    // 按消息类型重发
+    QJsonObject json;
+    json.insert("id", MyApp::m_nId);
+    json.insert("to", m_cell->id);
+    json.insert("msgId", newMsgId);
+    json.insert("ts", QDateTime::currentMSecsSinceEpoch());
+
+    switch (msgType) {
+    case Text:
+    {
+        json.insert("msg", content);
+        json.insert("type", Text);
+        Q_EMIT signalSendMessage(SendMsg, json);
+        break;
+    }
+    case Picture:
+    {
+        // 重新上传图片并重发通知
+        json.insert("msg", content);
+        json.insert("type", Picture);
+        m_tcpFileSocket->StartTransferFile(content);
+        m_nFileType = SendPicture;
+        Q_EMIT signalSendMessage(SendPicture, json);
+        break;
+    }
+    case Files:
+    {
+        // 直接重发文件消息（假设文件已存在于服务器）
+        QFileInfo fi(content);
+        QString sizeStr = QString("文件大小：") + myHelper::CalcSize(fi.size());
+        json.insert("msg", myHelper::GetFileNameWithExtension(content));
+        json.insert("size", sizeStr);
+        json.insert("type", Files);
+        Q_EMIT signalSendMessage(SendFile, json);
+        break;
+    }
+    default:
+        return;
+    }
+
+    // 启动新的ACK超时计时器
+    StartAckTimer(newMsgId);
+
+    // 数据库：更新旧记录的msgId为新的msgId，并重置状态为Pending
+    DataBaseMagr::Instance()->UpdateMsgId(m_cell->id, oldMsgId, newMsgId, MsgPending);
+}
+
 // 插入表情
 void ChatWindow::on_toolButton_3_clicked()
 {
-    //
+
+}
+
+// 语音录制按钮按下
+void ChatWindow::on_btnVoiceRecord_pressed()
+{
+    if (m_bRecording) return;
+    
+    // 生成语音文件名
+    QString timestamp = QString::number(QDateTime::currentMSecsSinceEpoch());
+    m_strVoiceFile = MyApp::m_strRecordPath + "/voice_" + timestamp + ".wav";
+    
+    // 开始录音
+    m_audioRecorder->startRecord(m_strVoiceFile);
+    m_bRecording = true;
+    
+    // 更新按钮状态
+    ui->btnVoiceRecord->setToolTip("松开发送");
+    ui->btnVoiceRecord->setStyleSheet("background-color: #ff6b6b;");
+}
+
+// 语音录制按钮释放
+void ChatWindow::on_btnVoiceRecord_released()
+{
+    if (!m_bRecording) return;
+    
+    // 停止录音
+    m_audioRecorder->sltStopRecord();
+    m_bRecording = false;
+    
+    // 恢复按钮状态
+    ui->btnVoiceRecord->setToolTip("按住录音");
+    ui->btnVoiceRecord->setStyleSheet("");
+}
+
+// 语音录制完成
+void ChatWindow::SltVoiceRecordFinished()
+{
+    if (m_strVoiceFile.isEmpty()) return;
+    
+    // 检查文件是否存在且有效
+    QFileInfo fileInfo(m_strVoiceFile);
+    if (!fileInfo.exists() || fileInfo.size() < 1024) { // 小于1KB认为无效
+        QToolTip::showText(ui->btnVoiceRecord->mapToGlobal(QPoint(0, 0)), "录音时间太短，请重新录制");
+        return;
+    }
+    
+    // 发送语音文件（复用文件发送机制）
+    SendVoiceMessage(m_strVoiceFile);
+}
+
+// 发送语音消息
+void ChatWindow::SendVoiceMessage(const QString &voiceFilePath)
+{
+    QFileInfo fileInfo(voiceFilePath);
+    if (!fileInfo.exists()) return;
+
+    // 设置发送环境并启动传输（进度回调统一创建气泡与发送消息）
+    m_strFileName = voiceFilePath;
+    m_updateTime.start();
+    m_nFileType = SendFile;
+    m_bSendingVoice = true;
+
+    // 启动文件传输
+    m_tcpFileSocket->SendFile(voiceFilePath, GetIpAddr(), Files);
+}   //
 
 }

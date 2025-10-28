@@ -68,10 +68,21 @@ bool DataBaseMagr::OpenMessageDb(const QString &dataName)
 
     // 添加数据表
     QSqlQuery query(msgdb);
-    // 创建历史聊天表
+    // 创建历史聊天表（新增 msgId 与 status 字段用于持久化消息状态）
     query.exec("CREATE TABLE MSGINFO (id INT PRIMARY KEY, userId INT, name varchar(20),"
                "head varchar(50), datetime varchar(20), filesize varchar(30),"
-               "content varchar(500), type INT, direction INT)");
+               "content varchar(500), type INT, direction INT, msgId INT, status INT)");
+
+    // 为常用查询添加索引，加速根据 userId + msgId 的定位
+    query.exec("CREATE INDEX IF NOT EXISTS idx_msginfo_user_msgid ON MSGINFO(userId, msgId)");
+
+    // 迁移：为已有表补充列（重复执行无害，失败可忽略）
+    QSqlQuery alterQuery(msgdb);
+    alterQuery.exec("ALTER TABLE MSGINFO ADD COLUMN msgId INT DEFAULT 0;");
+    alterQuery.exec("ALTER TABLE MSGINFO ADD COLUMN status INT DEFAULT 0;");
+
+    // 迁移后再次确保索引存在
+    alterQuery.exec("CREATE INDEX IF NOT EXISTS idx_msginfo_user_msgid ON MSGINFO(userId, msgId)");
 
     return true;
 }
@@ -93,18 +104,21 @@ void DataBaseMagr::AddHistoryMsg(const int &userId, ItemInfo *itemInfo)
     }
 
     // 根据新ID重新创建用户
-    query.prepare("INSERT INTO MSGINFO (id, userId, name, head, datetime, filesize, content, type, direction) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);");
+    query.prepare("INSERT INTO MSGINFO (id, userId, name, head, datetime, filesize, content, type, direction, msgId, status) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
 
     query.bindValue(0, nId + 1);
     query.bindValue(1, userId);
     query.bindValue(2, itemInfo->GetName());
     query.bindValue(3, itemInfo->GetStrPixmap());
     query.bindValue(4, itemInfo->GetDatetime());
-    query.bindValue(5, itemInfo->GetText());
-    query.bindValue(6, itemInfo->GetFileSizeString());
-    query.bindValue(7, itemInfo->GetOrientation());
-    query.bindValue(8, itemInfo->GetMsgType());
+    // 注意字段顺序：filesize, content, type, direction
+    query.bindValue(5, itemInfo->GetFileSizeString());
+    query.bindValue(6, itemInfo->GetText());
+    query.bindValue(7, itemInfo->GetMsgType());
+    query.bindValue(8, itemInfo->GetOrientation());
+    query.bindValue(9, itemInfo->GetMsgId());
+    query.bindValue(10, itemInfo->GetStatus());
 
     query.exec();
 }
@@ -306,15 +320,17 @@ QVector<ItemInfo*> DataBaseMagr::QueryHistory(const int &id, const int &count)
     QSqlQuery query(strQuery, msgdb);
     while (query.next()) {
         // 查看历史记录
-        items.push_front(new ItemInfo(
-                             query.value(2).toString(),
-                             query.value(4).toString(),
-                             query.value(3).toString(),
-                             query.value(5).toString(),
-                             query.value(6).toString(),
-                             query.value(7).toInt(),
-                             query.value(8).toInt())
-                         );
+        ItemInfo *info = new ItemInfo(
+                             query.value(2).toString(),        // name
+                             query.value(4).toString(),        // datetime
+                             query.value(3).toString(),        // head
+                             query.value(6).toString(),        // content(text)
+                             query.value(5).toString(),        // filesize
+                             query.value(8).toInt(),           // direction(orientation)
+                             query.value(7).toInt());          // type(msgType)
+        info->SetMsgId(query.value(9).toInt());
+        info->SetStatus((quint8)query.value(10).toInt());
+        items.push_front(info);
     }
 
     return items;
@@ -338,6 +354,30 @@ void DataBaseMagr::QueryAll() {
                  << query.value(2).toString() << query.value(3).toString()
                  << query.value(4).toString() << query.value(5).toString()
                  << query.value(6).toString() << query.value(7).toInt()
-                 << query.value(8).toInt();
+                 << query.value(8).toInt() << query.value(9).toInt()
+                 << query.value(10).toInt();
+
     }
+
+    // 输出结束
+}
+
+void DataBaseMagr::UpdateMsgStatus(const int &userId, const int &msgId, const quint8 &status)
+{
+    QString strSql = "UPDATE MSGINFO SET status=" + QString::number(status) +
+                     " WHERE userId=" + QString::number(userId) +
+                     " AND msgId=" + QString::number(msgId) + ";";
+    QSqlQuery query(strSql, msgdb);
+    query.exec();
+}
+
+void DataBaseMagr::UpdateMsgId(const int &userId, const int &oldMsgId, const int &newMsgId, const quint8 &status)
+{
+    QString strSql = "UPDATE MSGINFO SET msgId=" + QString::number(newMsgId) +
+                     ", status=" + QString::number(status) +
+                     " WHERE userId=" + QString::number(userId) +
+                     " AND msgId=" + QString::number(oldMsgId) + ";";
+    QSqlQuery query(strSql, msgdb);
+    query.exec();
+}
 }

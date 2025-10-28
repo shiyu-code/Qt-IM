@@ -4,9 +4,12 @@
 #include "customwidget.h"
 #include "clientsocket.h"
 #include "qqcell.h"
+#include "AudioRecorder.h"
 
 #include <QStandardItemModel>
 #include <QTime>
+#include <QHash>
+class QTimer;
 
 namespace Ui {
 class ChatWindow;
@@ -31,6 +34,8 @@ public:
     void AddMessage(const QJsonValue &json);
     // 更新群组人员的状态
     void UpdateUserStatus(const QJsonValue &dataVal);
+    // 更新当前窗口中指定消息的投递状态
+    void UpdateMessageStatus(int msgId, quint8 status);
 signals:
     void signalClose();
     // 发送给服务器的消息
@@ -54,6 +59,13 @@ private:
 
     quint8          m_nChatType;        // 聊天类型，群组聊天或私人聊天
 
+    // 语音录制
+    AudioRecorder   *m_audioRecorder;
+    bool            m_bRecording;
+    QString         m_strVoiceFile;
+    // 语音发送标记（用于在进度完成时构建Audio气泡）
+    bool            m_bSendingVoice;
+
 private slots:
     void SltChatMessage(const QString &text);
     void on_btnSendMsg_clicked();
@@ -75,10 +87,24 @@ private slots:
 
     void on_toolButton_3_clicked();
 
+    // ACK超时处理
+    void SltAckTimeout();
+
+    // 失败消息点击重发
+    void SltRetryMessage(int msgId, quint8 msgType, const QString &content);
+
+    // 语音录制相关槽函数
+    void on_btnVoiceRecord_pressed();
+    void on_btnVoiceRecord_released();
+    void SltVoiceRecordFinished();
+
 public slots:
 
 private:
     QString GetHeadPixmap(const QString &name) const;
+    void StartAckTimer(int msgId);
+    void SendVoiceMessage(const QString &voiceFilePath);
+    QHash<int, QTimer*> m_ackTimers;
 };
 
 #endif // CHATWINDOW_H

@@ -1270,19 +1270,24 @@ void MainWindow::ParseUpFriendHead(const QJsonValue &dataVal)
 }
 void MainWindow::ParseAckReply(const QJsonValue &dataVal)
 {
-    // 简单占位处理：日志记录/可扩展为UI提示
-    if (dataVal.isObject()) {
-        QJsonObject obj = dataVal.toObject();
-        int toId = obj.value("to").toInt();
-        int msgType = obj.value("type").toInt();
-        int queued = obj.value("queued").toInt();
-        int msgId = obj.value("msgId").toInt();
-        QString msg = obj.value("msg").toString();
+    // 更新对应聊天窗口中的消息投递状态
+    if (!dataVal.isObject()) return;
+    QJsonObject obj = dataVal.toObject();
+    int toId = obj.value("to").toInt();
+    int queued = obj.value("queued").toInt();
+    int msgId = obj.value("msgId").toInt();
+    QString msg = obj.value("msg").toString();
 
-        qDebug() << "ACK:" << "to" << toId << ", type" << msgType
-                 << ", queued" << queued << ", msgId" << msgId << ", msg" << msg;
+    qDebug() << "ACK:" << "to" << toId
+             << ", queued" << queued << ", msgId" << msgId << ", msg" << msg;
 
-        // 可选轻量提醒：目前仅占位，不弹窗，避免打扰用户
-        // 如需提示，可用：CMessageBox::Infomation(this, queued ? tr("消息已入队，对方上线后送达") : tr("消息已转发至在线用户"));
+    quint8 status = queued ? MsgQueued : MsgDelivered;
+
+    // 私聊窗口中查找对应用户并更新消息状态
+    foreach (ChatWindow *window, m_chatFriendWindows) {
+        if (window->GetUserId() == toId) {
+            window->UpdateMessageStatus(msgId, status);
+            break;
+        }
     }
 }
